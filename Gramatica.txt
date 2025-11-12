@@ -1,0 +1,58 @@
+PROGRAMA          → CLASE
+
+CLASE             → MOD_ACCESO? 'class' ID '{' MIEMBROS* '}'
+
+MIEMBROS          → ATRIBUTO | CONSTRUCTOR | METODO | MAIN
+
+ATRIBUTO          → MOD_ACCESO TIPO ID ';'
+
+CONSTRUCTOR       → CONSTRUCTOR_DEFECTO | CONSTRUCTOR_PARAMETROS
+
+CONSTRUCTOR_DEFECTO → MOD_ACCESO? ID '(' ')' '{' '}'
+
+CONSTRUCTOR_PARAMETROS → MOD_ACCESO? ID '(' PARAMETROS ')' '{' SENTENCIAS_ASIGNACION* '}'
+
+METODO            → METODO_GETSET | METODO_TOSTRING | METODO_MAIN
+
+METODO_GETSET     → MOD_ACCESO TIPO ( 'get' | 'set' ) ID '(' PARAMETROS? ')' '{' RETURN? '}'
+
+METODO_TOSTRING   → ANOTACION? MOD_ACCESO TIPO 'toString' '(' ')' '{' 'return' EXPRESION ';' '}'
+
+METODO_MAIN       → MOD_ACCESO 'static' 'void' 'main' '(' 'String' '[' ']' ID ')' '{' SENTENCIAS* '}'
+
+PARAMETROS        → TIPO ID ( ',' TIPO ID )*
+
+SENTENCIAS        → DECLARACION | ASIGNACION | CREACION_OBJETO | LLAMADA_METODO | RETURN | PRINT
+
+DECLARACION       → TIPO ID ( '=' EXPRESION )? ';'
+
+ASIGNACION        → ID '=' EXPRESION ';'
+
+CREACION_OBJETO   → TIPO ID '=' 'new' TIPO '(' ARGUMENTOS? ')' ';'
+
+LLAMADA_METODO    → ID '.' ID '(' ARGUMENTOS? ')' ';'
+
+RETURN            → 'return' EXPRESION ';'
+
+PRINT             → 'System.out.println' '(' EXPRESION ')' ';'
+
+EXPRESION         → EXPRESION_SIMPLE | EXPRESION_CADENA | EXPRESION_CONCATENACION
+
+EXPRESION_SIMPLE  → ID | LITERAL_NUMERO | LITERAL_CADENA | LITERAL_CARACTER
+
+EXPRESION_CADENA  → LITERAL_CADENA ( '+' LITERAL_CADENA )*
+
+EXPRESION_CONCATENACION → EXPRESION_SIMPLE ( '+' EXPRESION_SIMPLE )*
+
+ARGUMENTOS        → EXPRESION ( ',' EXPRESION )*
+
+SENTENCIAS_ASIGNACION → 'this' '.' ID '=' ID ';'
+
+// TERMINALES
+MOD_ACCESO        → 'public' | 'private' | 'protected'
+TIPO              → 'String' | 'int' | 'void' | ID
+ANOTACION         → '@Override'
+ID                → [a-zA-Z_][a-zA-Z0-9_]*
+LITERAL_NUMERO    → [0-9]+
+LITERAL_CADENA    → '"' [^"]* '"'
+LITERAL_CARACTER  → "'" [^'] "'"

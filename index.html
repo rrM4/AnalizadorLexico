@@ -12,22 +12,35 @@
         
         <h2>Editor de Código (Zona de Entrada)</h2>
         <textarea id="editor-codigo" class="code-editor" placeholder="Escribe tu código aquí..."></textarea>
-        <button id="btn-analizar" class="analyze-button">Ejecutar Análisis Léxico</button>
+        <button id="btn-analizar" class="analyze-button">Ejecutar Análisis</button>
+        
+         <div class="analysis-section">
+            <h2>Análisis Léxico</h2>
+            <div id="resultado-analisis">
+            </div>
+        </div>
+
+        <div class="analysis-section">
+            <h2>Análisis Sintáctico</h2>
+            <div id="resultado-sintactico">
+            </div>
+        </div>
         
         <div class="tables-container">
             <div class="table-section">
                 <h2>Zona de Lexemas y Componentes Léxicos</h2>
-                <table id="tabla-lexemas">
-                    <thead>
-                        <tr>
-                            <th>Lexema</th>
-                            <th>Componente Léxico</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Los datos se llenarán con JavaScript -->
-                    </tbody>
-                </table>
+                <div class="table-container">
+                    <table id="tabla-lexemas">
+                        <thead>
+                            <tr>
+                                <th>Lexema</th>
+                                <th>Componente Léxico</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
             </div>
             
             <div class="table-section">
@@ -39,7 +52,6 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <!-- Los datos se llenarán con JavaScript -->
                     </tbody>
                 </table>
             </div>
@@ -56,16 +68,8 @@
                 </tr>
             </thead>
             <tbody>
-                <!-- Los datos se llenarán con JavaScript -->
             </tbody>
         </table>
-        
-        <div class="analysis-section">
-            <h2>Análisis Léxico</h2>
-            <div id="resultado-analisis">
-                <!-- El contenido se llenará con JavaScript -->
-            </div>
-        </div>
     </div>
 
     <script src="analizador.js"></script>
