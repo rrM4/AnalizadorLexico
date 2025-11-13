@@ -256,7 +256,10 @@ class AnalizadorSintactico {
         return index < this.tokens.length ? this.tokens[index] : null;
     }
 
-    // GRAMÁTICA: PROGRAMA → CLASE
+    esMetodoGetSet(nombre) {
+        return nombre.startsWith('get') || nombre.startsWith('set');
+    }
+
     analizarPrograma() {
         try {
             this.analizarClase();
@@ -264,63 +267,50 @@ class AnalizadorSintactico {
                 this.error("Código adicional después del cierre de la clase");
             }
         } catch (e) {
-            // Error ya registrado, no hacer nada
+
         }
         return this.errores;
     }
 
-    // CLASE → MOD_ACCESO? 'class' ID '{' MIEMBROS* '}'
     analizarClase() {
-        // MOD_ACCESO?
         if (this.tipoActual === 'MOD_ACCESO') {
             this.avanzar();
         }
         
-        // 'class'
         this.esperar('PR', 'class');
         
-        // ID
         this.esperar('ID');
         
-        // '{'
         this.esperar('DELIM', '{');
         
-        // MIEMBROS*
         while (this.tokenActual && this.lexemaActual !== '}') {
             this.analizarMiembro();
         }
         
-        // '}'
         this.esperar('DELIM', '}');
     }
 
-    // MIEMBROS → ATRIBUTO | CONSTRUCTOR | METODO
     analizarMiembro() {
-        // ATRIBUTO: MOD_ACCESO TIPO ID ';'
         if (this.tipoActual === 'MOD_ACCESO' && 
             this.mirarSiguiente(1)?.tipo === 'TIPO' && 
             this.mirarSiguiente(2)?.tipo === 'ID' &&
             this.mirarSiguiente(3)?.lexema === ';') {
             this.analizarAtributo();
         }
-        // CONSTRUCTOR: MOD_ACCESO? ID '('
         else if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') && 
                 this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 1 : 0)?.tipo === 'ID' &&
                 this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 2 : 1)?.lexema === '(') {
             this.analizarConstructor();
         }
-        // MÉTODO con @Override
         else if (this.lexemaActual === '@Override') {
             this.analizarMetodo();
         }
-        // MÉTODO: MOD_ACCESO (TIPO | 'void') ID '('
         else if (this.tipoActual === 'MOD_ACCESO' && 
                 (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void') &&
                 this.mirarSiguiente(2)?.tipo === 'ID' &&
                 this.mirarSiguiente(3)?.lexema === '(') {
             this.analizarMetodo();
         }
-        // MÉTODO MAIN: MOD_ACCESO 'static' 'void' 'main' '('
         else if (this.tipoActual === 'MOD_ACCESO' && 
                 this.mirarSiguiente(1)?.lexema === 'static' &&
                 this.mirarSiguiente(2)?.lexema === 'void' &&
@@ -333,7 +323,6 @@ class AnalizadorSintactico {
         }
     }
 
-    // ATRIBUTO → MOD_ACCESO TIPO ID ';'
     analizarAtributo() {
         this.esperar('MOD_ACCESO');
         this.esperar('TIPO');
@@ -341,48 +330,69 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ';');
     }
 
-    // CONSTRUCTOR → MOD_ACCESO? ID '(' PARAMETROS? ')' '{' SENTENCIAS* '}'
     analizarConstructor() {
-        // MOD_ACCESO?
+        const tieneParametros = this.detectarParametrosConstructor();
+        
+        if (!tieneParametros) {
+            this.analizarConstructorDefecto();
+        } else {
+            this.analizarConstructorParametros();
+        }
+    }
+
+    detectarParametrosConstructor() {
+        let tempPos = this.posicion;
+        if (this.tokens[tempPos]?.tipo === 'MOD_ACCESO') tempPos++;
+        if (this.tokens[tempPos]?.tipo === 'ID') tempPos++;
+        if (this.tokens[tempPos]?.lexema === '(') tempPos++;
+        
+        return this.tokens[tempPos]?.tipo === 'TIPO';
+    }
+
+    analizarConstructorDefecto() {
         if (this.tipoActual === 'MOD_ACCESO') {
             this.avanzar();
         }
         
         this.esperar('ID');
         this.esperar('DELIM', '(');
-        
-        // PARAMETROS?
-        if (this.tipoActual === 'TIPO') {
-            this.analizarParametros();
+        this.esperar('DELIM', ')');
+        this.esperar('DELIM', '{');
+        this.esperar('DELIM', '}');
+    }
+
+    analizarConstructorParametros() {
+        if (this.tipoActual === 'MOD_ACCESO') {
+            this.avanzar();
         }
         
+        this.esperar('ID');
+        this.esperar('DELIM', '(');
+        this.analizarParametros();
         this.esperar('DELIM', ')');
         this.esperar('DELIM', '{');
         
-        // SENTENCIAS*
         while (this.tokenActual && this.lexemaActual !== '}') {
-            this.analizarSentencia();
+            this.analizarSentenciaAsignacionThis();
         }
         
         this.esperar('DELIM', '}');
     }
 
-    // METODO → METODO_GETSET | METODO_TOSTRING | METODO_MAIN
     analizarMetodo() {
-        // ANOTACION?
         if (this.coincidir('ANOTACION')) {
-            // @Override consumido
         }
         
         this.esperar('MOD_ACCESO');
         
-        // Determinar tipo específico de método
         if (this.esMetodoMain()) {
             this.analizarMetodoMain();
         } else if (this.esMetodoToString()) {
             this.analizarMetodoToString();
-        } else {
+        } else if (this.esMetodoGetSet()) {
             this.analizarMetodoGetSet();
+        } else {
+            this.analizarMetodoNormal();
         }
     }
 
@@ -397,9 +407,45 @@ class AnalizadorSintactico {
                this.mirarSiguiente(1)?.lexema === 'toString';
     }
 
-    // METODO_GETSET → MOD_ACCESO TIPO ID '(' PARAMETROS? ')' '{' SENTENCIAS* '}'
+    esMetodoGetSet() {
+        const nombreMetodo = this.mirarSiguiente(1)?.lexema;
+        return nombreMetodo && this.esMetodoGetSet(nombreMetodo);
+    }
+
     analizarMetodoGetSet() {
-        // TIPO o void
+        const tipoRetorno = this.lexemaActual;
+        this.esperar('TIPO');
+        
+        const nombreMetodo = this.lexemaActual;
+        if (!this.esMetodoGetSet(nombreMetodo)) {
+            this.error(`Los métodos getter/setter deben comenzar con 'get' o 'set'. Encontrado: ${nombreMetodo}`);
+        }
+        this.esperar('ID');
+        
+        this.esperar('DELIM', '(');
+        
+        if (nombreMetodo.startsWith('set')) {
+            if (this.tipoActual !== 'TIPO') {
+                this.error("Los métodos setter deben tener un parámetro");
+            }
+            this.analizarParametros();
+        } else if (nombreMetodo.startsWith('get') && this.tipoActual === 'TIPO') {
+            this.analizarParametros();
+        }
+        
+        this.esperar('DELIM', ')');
+        this.esperar('DELIM', '{');
+        
+        if (this.lexemaActual === 'return') {
+            this.analizarReturn();
+        } else if (nombreMetodo.startsWith('get')) {
+            this.error("Los métodos getter deben tener sentencia return");
+        }
+        
+        this.esperar('DELIM', '}');
+    }
+
+    analizarMetodoNormal() {
         if (this.lexemaActual === 'void') {
             this.esperar('PR', 'void');
         } else {
@@ -409,7 +455,6 @@ class AnalizadorSintactico {
         this.esperar('ID');
         this.esperar('DELIM', '(');
         
-        // PARAMETROS?
         if (this.tipoActual === 'TIPO') {
             this.analizarParametros();
         }
@@ -417,7 +462,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ')');
         this.esperar('DELIM', '{');
         
-        // SENTENCIAS*
         while (this.tokenActual && this.lexemaActual !== '}') {
             this.analizarSentencia();
         }
@@ -425,7 +469,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', '}');
     }
 
-    // METODO_TOSTRING → ANOTACION? MOD_ACCESO 'String' 'toString' '(' ')' '{' 'return' EXPRESION ';' '}'
     analizarMetodoToString() {
         this.esperar('TIPO', 'String');
         this.esperar('ID', 'toString');
@@ -438,7 +481,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', '}');
     }
 
-    // METODO_MAIN → MOD_ACCESO 'static' 'void' 'main' '(' 'String' '[' ']' ID ')' '{' SENTENCIAS* '}'
     analizarMetodoMain() {
         this.esperar('PR', 'static');
         this.esperar('PR', 'void');
@@ -451,7 +493,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ')');
         this.esperar('DELIM', '{');
         
-        // SENTENCIAS*
         while (this.tokenActual && this.lexemaActual !== '}') {
             this.analizarSentencia();
         }
@@ -459,7 +500,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', '}');
     }
 
-    // PARAMETROS → TIPO ID ( ',' TIPO ID )*
     analizarParametros() {
         this.esperar('TIPO');
         this.esperar('ID');
@@ -470,30 +510,23 @@ class AnalizadorSintactico {
         }
     }
 
-    // SENTENCIAS para métodos
     analizarSentencia() {
-        // DECLARACIÓN: TIPO ID (= EXPRESION)? ;
         if (this.tipoActual === 'TIPO' && this.mirarSiguiente(1)?.tipo === 'ID') {
             this.analizarDeclaracion();
         }
-        // DECLARACIÓN con nombre de clase: ID ID (= new ID(...))? ;
         else if (this.tipoActual === 'ID' && this.mirarSiguiente(1)?.tipo === 'ID' && 
                 this.mirarSiguiente(2)?.lexema !== '(') {
             this.analizarDeclaracionObjeto();
         }
-        // PRINT
         else if (this.lexemaActual === 'System.out.println') {
             this.analizarPrint();
         }
-        // RETURN
         else if (this.lexemaActual === 'return') {
             this.analizarReturn();
         }
-        // ASIGNACIÓN o LLAMADA: ID ...
         else if (this.tipoActual === 'ID') {
             this.analizarSentenciaID();
         }
-        // this. asignación
         else if (this.lexemaActual === 'this') {
             this.analizarSentenciaAsignacionThis();
         }
@@ -502,7 +535,6 @@ class AnalizadorSintactico {
         }
     }
 
-    // DECLARACIÓN → TIPO ID ( '=' EXPRESION )? ';'
     analizarDeclaracion() {
         this.esperar('TIPO');
         this.esperar('ID');
@@ -514,10 +546,9 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ';');
     }
 
-    // DECLARACION_OBJETO → ID ID ('=' 'new' ID '(' ARGUMENTOS? ')')? ';'
     analizarDeclaracionObjeto() {
-        this.esperar('ID'); // Tipo (nombre de clase)
-        this.esperar('ID'); // Identificador
+        this.esperar('ID');
+        this.esperar('ID');
         
         if (this.coincidir('OP_ASIGN', '=')) {
             this.esperar('PR', 'new');
@@ -534,20 +565,17 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ';');
     }
 
-    // Manejo de sentencias que comienzan con ID
     analizarSentenciaID() {
         this.esperar('ID');
         
         const siguiente = this.tokenActual;
         
         if (siguiente?.lexema === '=') {
-            // ASIGNACIÓN: ID = EXPRESION ;
             this.avanzar();
             this.analizarExpresion();
             this.esperar('DELIM', ';');
         }
         else if (siguiente?.lexema === '.') {
-            // LLAMADA: ID . ID ( ... )
             this.avanzar();
             this.esperar('ID');
             this.esperar('DELIM', '(');
@@ -560,7 +588,6 @@ class AnalizadorSintactico {
             this.esperar('DELIM', ';');
         }
         else if (siguiente?.lexema === '(') {
-            // LLAMADA: ID ( ... )
             this.avanzar();
             
             if (this.tipoActual !== 'DELIM' || this.lexemaActual !== ')') {
@@ -575,14 +602,12 @@ class AnalizadorSintactico {
         }
     }
 
-    // RETURN → 'return' EXPRESION ';'
     analizarReturn() {
         this.esperar('PR', 'return');
         this.analizarExpresion();
         this.esperar('DELIM', ';');
     }
 
-    // PRINT → 'System.out.println' '(' EXPRESION ')' ';'
     analizarPrint() {
         this.esperar('PRINT');
         this.esperar('DELIM', '(');
@@ -591,7 +616,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ';');
     }
 
-    // ARGUMENTOS → EXPRESION ( ',' EXPRESION )*
     analizarArgumentos() {
         this.analizarExpresion();
         
@@ -600,23 +624,19 @@ class AnalizadorSintactico {
         }
     }
 
-    // EXPRESION → EXPRESION_SIMPLE ( OP_ARIT EXPRESION_SIMPLE )*
     analizarExpresion() {
         this.analizarExpresionSimple();
         
-        while (this.tipoActual === 'OP_ARIT') {
-            this.avanzar();
-            this.analizarExpresionSimple();
+        if (this.tipoActual === 'OP_ARIT' && this.lexemaActual === '+') {
+            this.analizarExpresionConcatenacion();
         }
     }
 
-    // EXPRESION_SIMPLE → ID | ENTERO | REAL | CADENA | CARACTER | LLAMADA_METODO
     analizarExpresionSimple() {
         if (this.tipoActual === 'ID' || this.tipoActual === 'ENTERO' || 
             this.tipoActual === 'REAL' || this.tipoActual === 'CADENA' || 
             this.tipoActual === 'CARACTER') {
             
-            // Si es un ID y el siguiente token es un punto, es una llamada a método
             if (this.tipoActual === 'ID' && this.mirarSiguiente()?.lexema === '.') {
                 this.analizarLlamadaMetodoExpresion();
             } else {
@@ -627,7 +647,12 @@ class AnalizadorSintactico {
         }
     }
 
-    // LLAMADA_METODO_EXPRESION → ID ( '.' ID )* '(' ARGUMENTOS? ')' 
+    analizarExpresionConcatenacion() {
+        while (this.coincidir('OP_ARIT', '+')) {
+            this.analizarExpresionSimple();
+        }
+    }
+
     analizarLlamadaMetodoExpresion() {
         this.esperar('ID');
         
@@ -644,7 +669,6 @@ class AnalizadorSintactico {
         this.esperar('DELIM', ')');
     }
 
-    // SENTENCIAS_ASIGNACION → 'this' '.' ID '=' ID ';'
     analizarSentenciaAsignacionThis() {
         this.esperar('PR', 'this');
         this.esperar('DELIM', '.');
