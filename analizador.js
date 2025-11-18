@@ -1,4 +1,6 @@
-// DEFINICIÓN DE TOKENS - PATRONES LÉXICOS PARA JAVA
+// ==========================================
+// 1. DEFINICIÓN DE TOKENS Y LEXER
+// ==========================================
 const tokensDefinidos = [
     { type: 'COMENTARIO_LINEA', pattern: /^\/\/[^\n]*/ },
     { type: 'COMENTARIO_BLOQUE', pattern: /^\/\*[\s\S]*?\*\// },
@@ -9,6 +11,7 @@ const tokensDefinidos = [
     { type: 'PRINT', pattern: /^System\.out\.println\b/ },
     { type: 'CADENA', pattern: /^"([^"\\]|\\.)*"/ },
     { type: 'CARACTER', pattern: /^'([^'\\]|\\.)*'/ },
+    { type: 'ERROR_ID_INICIO_NUM', pattern: /^\d+[a-zA-Z_][a-zA-Z0-9_]*/ },
     { type: 'REAL', pattern: /^\d+\.\d+/ },
     { type: 'ENTERO', pattern: /^\d+/ },
     { type: 'OP_REL', pattern: /^(>=|<=|==|!=)/ },
@@ -21,7 +24,6 @@ const tokensDefinidos = [
     { type: 'ID', pattern: /^[a-zA-Z_][a-zA-Z0-9_]*/ }
 ];
 
-// ========== ANALIZADOR LÉXICO ==========
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -42,29 +44,24 @@ function manejarComentarios(codigo, posicion, linea, columna) {
         if (finLinea === -1) return { nuevaPosicion: codigo.length, nuevaLinea: linea, nuevaColumna: columna };
         return { nuevaPosicion: finLinea + 1, nuevaLinea: linea + 1, nuevaColumna: 1 };
     }
-    
     if (codigo.slice(posicion).startsWith('/*')) {
         const finComentario = codigo.indexOf('*/', posicion);
         if (finComentario === -1) return { nuevaPosicion: codigo.length, nuevaLinea: linea, nuevaColumna: columna };
-        
         const contenidoComentario = codigo.slice(posicion, finComentario + 2);
         const lineasEnComentario = (contenidoComentario.match(/\n/g) || []).length;
         const ultimaLinea = contenidoComentario.slice(contenidoComentario.lastIndexOf('\n') + 1);
-        
-        return { 
-            nuevaPosicion: finComentario + 2, 
+        return {
+            nuevaPosicion: finComentario + 2,
             nuevaLinea: linea + lineasEnComentario,
             nuevaColumna: lineasEnComentario > 0 ? ultimaLinea.length : columna + contenidoComentario.length
         };
     }
-    
     return null;
 }
 
 function analizadorLexico(codigo) {
     let tokens = [];
     let errores = [];
-    let simbolos = new Map();
     let posicion = 0;
     let linea = 1;
     let columna = 1;
@@ -92,10 +89,9 @@ function analizadorLexico(codigo) {
         let tokenEncontrado = false;
         let mejorMatch = null;
         let mejorLongitud = 0;
-        
+
         for (let tokenDef of tokensDefinidos) {
             const match = codigo.slice(posicion).match(tokenDef.pattern);
-            
             if (match && match.index === 0) {
                 const lexema = match[0];
                 if (lexema.length > mejorLongitud) {
@@ -104,28 +100,25 @@ function analizadorLexico(codigo) {
                 }
             }
         }
-        
+
         if (mejorMatch) {
             const { tokenDef, lexema } = mejorMatch;
-            
-            if (!tokenDef.type.startsWith('COMENTARIO')) {
+
+            if (tokenDef.type === 'ERROR_ID_INICIO_NUM') {
+                errores.push({
+                    caracter: lexema,
+                    linea: linea,
+                    columna: columna,
+                    descripcion: `Identificador inválido: '${lexema}' no puede iniciar con un número`
+                });
+            }
+            else if (!tokenDef.type.startsWith('COMENTARIO')) {
                 tokens.push({
                     lexema: lexema,
                     tipo: tokenDef.type,
                     linea: linea,
                     columna: columna
                 });
-
-                if (tokenDef.type === 'ID') {
-                    if (!simbolos.has(lexema)) {
-                        simbolos.set(lexema, {
-                            tipo: 'desconocido',
-                            valor: null,
-                            linea: linea,
-                            columna: columna
-                        });
-                    }
-                }
             }
 
             const lineasEnLexema = (lexema.match(/\n/g) || []).length;
@@ -136,7 +129,7 @@ function analizadorLexico(codigo) {
             } else {
                 columna += lexema.length;
             }
-            
+
             posicion += lexema.length;
             tokenEncontrado = true;
         }
@@ -153,101 +146,30 @@ function analizadorLexico(codigo) {
             columna++;
         }
     }
-    
-    return { tokens, errores, simbolos };
+    return { tokens, errores };
 }
 
-function inferirTipos(tokens, tablaSimbolos) {
-    for (let i = 0; i < tokens.length - 1; i++) {
-        if (tokens[i].tipo === 'TIPO' && tokens[i + 1].tipo === 'ID') {
-            const tipo = tokens[i].lexema;
-            const identificador = tokens[i + 1].lexema;
-            if (tablaSimbolos.has(identificador)) {
-                tablaSimbolos.get(identificador).tipo = tipo;
-            }
-        }
-    }
-    
-    for (let i = 0; i < tokens.length - 2; i++) {
-        if (tokens[i].tipo === 'ID' && 
-            tokens[i + 1].tipo === 'OP_ASIGN' &&
-            (tokens[i + 2].tipo === 'ENTERO' || tokens[i + 2].tipo === 'REAL' || 
-             tokens[i + 2].tipo === 'CADENA' || tokens[i + 2].tipo === 'CARACTER')) {
-            
-            const identificador = tokens[i].lexema;
-            if (tablaSimbolos.has(identificador)) {
-                tablaSimbolos.get(identificador).valor = tokens[i + 2].lexema;
-            }
-        }
-    }
-    
-    for (let i = 0; i < tokens.length - 2; i++) {
-        if (tokens[i].tipo === 'PR' && tokens[i].lexema === 'class' &&
-            tokens[i + 1].tipo === 'ID') {
-            
-            const nombreClase = tokens[i + 1].lexema;
-            if (!tablaSimbolos.has(nombreClase)) {
-                tablaSimbolos.set(nombreClase, {
-                    tipo: 'class',
-                    valor: null,
-                    linea: tokens[i + 1].linea,
-                    columna: tokens[i + 1].columna
-                });
-            }
-        }
-    }
-}
-
-// ========== ANALIZADOR SINTÁCTICO ==========
 class AnalizadorSintactico {
     constructor(tokens) {
         this.tokens = tokens;
         this.posicion = 0;
         this.errores = [];
+        this.tablaSimbolos = [];
+        this.MAX_ERRORES = 2;
+        this.contexto = {
+            claseActual: null,
+            metodoActual: null
+        };
     }
 
-    get tokenActual() {
-        return this.posicion < this.tokens.length ? this.tokens[this.posicion] : null;
-    }
-
-    get tipoActual() {
-        return this.tokenActual ? this.tokenActual.tipo : 'EOF';
-    }
-
-    get lexemaActual() {
-        return this.tokenActual ? this.tokenActual.lexema : 'EOF';
-    }
+    // --- Control de Tokens ---
+    get tokenActual() { return this.posicion < this.tokens.length ? this.tokens[this.posicion] : null; }
+    get tipoActual() { return this.tokenActual ? this.tokenActual.tipo : 'EOF'; }
+    get lexemaActual() { return this.tokenActual ? this.tokenActual.lexema : 'EOF'; }
 
     avanzar() {
-        this.posicion++;
-    }
-
-    coincidir(tipoEsperado, lexemaEsperado = null) {
-        if (this.tokenActual && 
-            this.tipoActual === tipoEsperado && 
-            (!lexemaEsperado || this.lexemaActual === lexemaEsperado)) {
-            this.avanzar();
-            return true;
-        }
-        return false;
-    }
-
-    error(mensaje) {
-        const token = this.tokenActual || { linea: 1, columna: 1, tipo: 'EOF', lexema: 'EOF' };
-        this.errores.push({
-            linea: token.linea,
-            columna: token.columna,
-            mensaje: mensaje,
-            tokenEncontrado: `${token.tipo} ('${token.lexema}')`
-        });
-        throw new Error('Error sintáctico');
-    }
-
-    esperar(tipoEsperado, lexemaEsperado = null) {
-        if (!this.coincidir(tipoEsperado, lexemaEsperado)) {
-            const token = this.tokenActual || { tipo: 'EOF', lexema: 'EOF' };
-            const esperado = lexemaEsperado ? `'${lexemaEsperado}'` : tipoEsperado;
-            this.error(`Se esperaba ${esperado} pero se encontró ${token.tipo} ('${token.lexema}')`);
+        if (this.posicion < this.tokens.length) {
+            this.posicion++;
         }
     }
 
@@ -256,279 +178,278 @@ class AnalizadorSintactico {
         return index < this.tokens.length ? this.tokens[index] : null;
     }
 
-    esMetodoGetSet(nombre) {
-        return nombre.startsWith('get') || nombre.startsWith('set');
+    // --- Manejo de Errores ---
+    error(mensaje) {
+        const token = this.tokenActual || { linea: '?', columna: '?', tipo: 'EOF', lexema: 'EOF' };
+        this.errores.push({
+            linea: token.linea,
+            columna: token.columna,
+            mensaje: mensaje,
+            tokenEncontrado: `${token.tipo} ('${token.lexema}')`
+        });
+
+        if (this.errores.length >= this.MAX_ERRORES) {
+            throw new Error("LIMITE_ERRORES_ALCANZADO");
+        } else {
+            this.recuperar();
+        }
+    }
+
+    recuperar() {
+        // Saltar hasta encontrar un punto y coma o llaves para intentar sincronizar
+        while (this.tokenActual &&
+        this.lexemaActual !== ';' &&
+        this.lexemaActual !== '}' &&
+        this.lexemaActual !== '{') {
+            this.avanzar();
+        }
+        if (this.tokenActual && this.lexemaActual === ';') {
+            this.avanzar();
+        }
+    }
+
+    coincidir(tipoEsperado, lexemaEsperado = null) {
+        if (this.tokenActual && this.tipoActual === tipoEsperado && (!lexemaEsperado || this.lexemaActual === lexemaEsperado)) {
+            this.avanzar();
+            return true;
+        }
+        return false;
+    }
+
+    esperar(tipoEsperado, lexemaEsperado = null) {
+        if (!this.coincidir(tipoEsperado, lexemaEsperado)) {
+            const token = this.tokenActual || { tipo: 'EOF', lexema: 'EOF' };
+            const esperado = lexemaEsperado ? `'${lexemaEsperado}'` : tipoEsperado;
+            this.error(`Se esperaba ${esperado}`);
+        }
+    }
+
+    // --- Registro de Símbolos ---
+    registrarSimbolo(lexema, tipoDato, categoria, tokenRef) {
+        let contextoDesc = "";
+
+        if (categoria === 'Clase') {
+            contextoDesc = "Definición de Clase";
+        } else if (categoria === 'Atributo') {
+            contextoDesc = `Atributo de clase '${this.contexto.claseActual}'`;
+        } else if (categoria === 'Método') {
+            contextoDesc = `Método de la clase '${this.contexto.claseActual}'`;
+        } else if (categoria === 'Parámetro') {
+            contextoDesc = `Parámetro del método '${this.contexto.metodoActual}'`;
+        } else if (categoria === 'Variable Local' || categoria.includes('Variable')) {
+            contextoDesc = `Variable local en método '${this.contexto.metodoActual}'`;
+        }
+
+        this.tablaSimbolos.push({
+            identificador: lexema,
+            tipo: tipoDato,
+            contexto: contextoDesc,
+            linea: tokenRef.linea,
+            columna: tokenRef.columna
+        });
     }
 
     analizarPrograma() {
         try {
-            this.analizarClase();
-            if (this.tokenActual) {
-                this.error("Código adicional después del cierre de la clase");
+            while (this.tokenActual) {
+                if (this.lexemaActual === 'class' || this.tipoActual === 'MOD_ACCESO') {
+                    this.analizarClase();
+                } else {
+                    // Ignorar basura fuera de clase si no es EOF
+                    if(this.tokenActual) this.error("Código fuera de la clase");
+                }
             }
         } catch (e) {
-
+            if (e.message !== "LIMITE_ERRORES_ALCANZADO") console.error(e);
         }
-        return this.errores;
+        return { errores: this.errores, simbolos: this.tablaSimbolos };
     }
 
     analizarClase() {
-        if (this.tipoActual === 'MOD_ACCESO') {
-            this.avanzar();
-        }
-        
+        if (this.tipoActual === 'MOD_ACCESO') this.avanzar();
         this.esperar('PR', 'class');
-        
+
+        const tokenClase = this.tokenActual;
         this.esperar('ID');
-        
-        this.esperar('DELIM', '{');
-        
-        while (this.tokenActual && this.lexemaActual !== '}') {
-            this.analizarMiembro();
+        if(tokenClase) {
+            this.contexto.claseActual = tokenClase.lexema;
+            this.registrarSimbolo(tokenClase.lexema, 'class', 'Clase', tokenClase);
         }
-        
+
+        this.esperar('DELIM', '{');
+
+        while (this.tokenActual && this.lexemaActual !== '}') {
+            try {
+                this.analizarMiembro();
+            } catch (e) {
+                if (e.message === "LIMITE_ERRORES_ALCANZADO") throw e;
+                // Si falla un miembro, recuperar ya se ejecutó, intentamos con el siguiente
+            }
+        }
         this.esperar('DELIM', '}');
     }
 
     analizarMiembro() {
-        if (this.tipoActual === 'MOD_ACCESO' && 
-            this.mirarSiguiente(1)?.tipo === 'TIPO' && 
+        // Atributos
+        if (this.tipoActual === 'MOD_ACCESO' &&
+            this.mirarSiguiente(1)?.tipo === 'TIPO' &&
             this.mirarSiguiente(2)?.tipo === 'ID' &&
             this.mirarSiguiente(3)?.lexema === ';') {
             this.analizarAtributo();
         }
-        else if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') && 
-                this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 1 : 0)?.tipo === 'ID' &&
-                this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 2 : 1)?.lexema === '(') {
+        // Constructores
+        else if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') &&
+            this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 1 : 0)?.tipo === 'ID' &&
+            this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 2 : 1)?.lexema === '(') {
             this.analizarConstructor();
         }
-        else if (this.lexemaActual === '@Override') {
-            this.analizarMetodo();
-        }
-        else if (this.tipoActual === 'MOD_ACCESO' && 
-                (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void') &&
-                this.mirarSiguiente(2)?.tipo === 'ID' &&
-                this.mirarSiguiente(3)?.lexema === '(') {
-            this.analizarMetodo();
-        }
-        else if (this.tipoActual === 'MOD_ACCESO' && 
-                this.mirarSiguiente(1)?.lexema === 'static' &&
-                this.mirarSiguiente(2)?.lexema === 'void' &&
-                this.mirarSiguiente(3)?.lexema === 'main' &&
-                this.mirarSiguiente(4)?.lexema === '(') {
+        // Métodos
+        else if (this.lexemaActual === '@Override' ||
+            (this.tipoActual === 'MOD_ACCESO' &&
+                (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void' || this.mirarSiguiente(1)?.lexema === 'static'))) {
             this.analizarMetodo();
         }
         else {
-            this.error("Se esperaba declaración de atributo, constructor o método");
+            this.error("Declaración no reconocida dentro de la clase");
         }
     }
 
     analizarAtributo() {
         this.esperar('MOD_ACCESO');
+        const tTipo = this.tokenActual;
         this.esperar('TIPO');
+        const tId = this.tokenActual;
         this.esperar('ID');
+        if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Atributo', tId);
         this.esperar('DELIM', ';');
     }
 
     analizarConstructor() {
-        const tieneParametros = this.detectarParametrosConstructor();
-        
-        if (!tieneParametros) {
-            this.analizarConstructorDefecto();
-        } else {
-            this.analizarConstructorParametros();
-        }
-    }
-
-    detectarParametrosConstructor() {
-        let tempPos = this.posicion;
-        if (this.tokens[tempPos]?.tipo === 'MOD_ACCESO') tempPos++;
-        if (this.tokens[tempPos]?.tipo === 'ID') tempPos++;
-        if (this.tokens[tempPos]?.lexema === '(') tempPos++;
-        
-        return this.tokens[tempPos]?.tipo === 'TIPO';
-    }
-
-    analizarConstructorDefecto() {
-        if (this.tipoActual === 'MOD_ACCESO') {
-            this.avanzar();
-        }
-        
+        this.contexto.metodoActual = "Constructor";
+        if (this.tipoActual === 'MOD_ACCESO') this.avanzar();
         this.esperar('ID');
         this.esperar('DELIM', '(');
+        if (this.tipoActual === 'TIPO') this.analizarParametros();
         this.esperar('DELIM', ')');
         this.esperar('DELIM', '{');
+        this.analizarCuerpoMetodo();
         this.esperar('DELIM', '}');
-    }
-
-    analizarConstructorParametros() {
-        if (this.tipoActual === 'MOD_ACCESO') {
-            this.avanzar();
-        }
-        
-        this.esperar('ID');
-        this.esperar('DELIM', '(');
-        this.analizarParametros();
-        this.esperar('DELIM', ')');
-        this.esperar('DELIM', '{');
-        
-        while (this.tokenActual && this.lexemaActual !== '}') {
-            this.analizarSentenciaAsignacionThis();
-        }
-        
-        this.esperar('DELIM', '}');
+        this.contexto.metodoActual = null;
     }
 
     analizarMetodo() {
-        if (this.coincidir('ANOTACION')) {
-        }
-        
+        if (this.coincidir('ANOTACION')) {}
         this.esperar('MOD_ACCESO');
-        
-        if (this.esMetodoMain()) {
-            this.analizarMetodoMain();
-        } else if (this.esMetodoToString()) {
-            this.analizarMetodoToString();
-        } else if (this.esMetodoGetSet()) {
-            this.analizarMetodoGetSet();
-        } else {
-            this.analizarMetodoNormal();
-        }
-    }
 
-    esMetodoMain() {
-        return this.lexemaActual === 'static' &&
-               this.mirarSiguiente(1)?.lexema === 'void' &&
-               this.mirarSiguiente(2)?.lexema === 'main';
-    }
+        let tipoRetorno = "";
 
-    esMetodoToString() {
-        return this.lexemaActual === 'String' &&
-               this.mirarSiguiente(1)?.lexema === 'toString';
-    }
-
-    esMetodoGetSet() {
-        const nombreMetodo = this.mirarSiguiente(1)?.lexema;
-        return nombreMetodo && this.esMetodoGetSet(nombreMetodo);
-    }
-
-    analizarMetodoGetSet() {
-        const tipoRetorno = this.lexemaActual;
-        this.esperar('TIPO');
-        
-        const nombreMetodo = this.lexemaActual;
-        if (!this.esMetodoGetSet(nombreMetodo)) {
-            this.error(`Los métodos getter/setter deben comenzar con 'get' o 'set'. Encontrado: ${nombreMetodo}`);
-        }
-        this.esperar('ID');
-        
-        this.esperar('DELIM', '(');
-        
-        if (nombreMetodo.startsWith('set')) {
-            if (this.tipoActual !== 'TIPO') {
-                this.error("Los métodos setter deben tener un parámetro");
-            }
-            this.analizarParametros();
-        } else if (nombreMetodo.startsWith('get') && this.tipoActual === 'TIPO') {
-            this.analizarParametros();
-        }
-        
-        this.esperar('DELIM', ')');
-        this.esperar('DELIM', '{');
-        
-        if (this.lexemaActual === 'return') {
-            this.analizarReturn();
-        } else if (nombreMetodo.startsWith('get')) {
-            this.error("Los métodos getter deben tener sentencia return");
-        }
-        
-        this.esperar('DELIM', '}');
-    }
-
-    analizarMetodoNormal() {
-        if (this.lexemaActual === 'void') {
+        // Manejo de static void main vs void normal vs tipo normal
+        if (this.lexemaActual === 'static') {
+            this.avanzar();
             this.esperar('PR', 'void');
+            tipoRetorno = 'void';
+            this.esperar('ID', 'main');
+            this.contexto.metodoActual = 'main';
+            this.registrarSimbolo('main', 'void', 'Método', {linea:0, columna:0, lexema:'main'});
         } else {
-            this.esperar('TIPO');
-        }
-        
-        this.esperar('ID');
-        this.esperar('DELIM', '(');
-        
-        if (this.tipoActual === 'TIPO') {
-            this.analizarParametros();
-        }
-        
-        this.esperar('DELIM', ')');
-        this.esperar('DELIM', '{');
-        
-        while (this.tokenActual && this.lexemaActual !== '}') {
-            this.analizarSentencia();
-        }
-        
-        this.esperar('DELIM', '}');
-    }
+            if (this.lexemaActual === 'void') {
+                tipoRetorno = 'void';
+                this.avanzar();
+            } else {
+                tipoRetorno = this.tokenActual ? this.tokenActual.lexema : 'unknown';
+                this.esperar('TIPO');
+            }
 
-    analizarMetodoToString() {
-        this.esperar('TIPO', 'String');
-        this.esperar('ID', 'toString');
-        this.esperar('DELIM', '(');
-        this.esperar('DELIM', ')');
-        this.esperar('DELIM', '{');
-        this.esperar('PR', 'return');
-        this.analizarExpresion();
-        this.esperar('DELIM', ';');
-        this.esperar('DELIM', '}');
-    }
-
-    analizarMetodoMain() {
-        this.esperar('PR', 'static');
-        this.esperar('PR', 'void');
-        this.esperar('ID', 'main');
-        this.esperar('DELIM', '(');
-        this.esperar('TIPO', 'String');
-        this.esperar('DELIM', '[');
-        this.esperar('DELIM', ']');
-        this.esperar('ID');
-        this.esperar('DELIM', ')');
-        this.esperar('DELIM', '{');
-        
-        while (this.tokenActual && this.lexemaActual !== '}') {
-            this.analizarSentencia();
+            const tokenMetodo = this.tokenActual;
+            this.esperar('ID');
+            this.contexto.metodoActual = tokenMetodo ? tokenMetodo.lexema : 'anonimo';
+            if(tokenMetodo) this.registrarSimbolo(tokenMetodo.lexema, tipoRetorno, 'Método', tokenMetodo);
         }
-        
+
+        this.esperar('DELIM', '(');
+
+        // Parámetros (special case main)
+        if (this.contexto.metodoActual === 'main') {
+            if (this.lexemaActual === 'String') {
+                this.esperar('TIPO', 'String');
+                this.esperar('DELIM', '['); this.esperar('DELIM', ']');
+                const arg = this.tokenActual;
+                this.esperar('ID');
+                if(arg) this.registrarSimbolo(arg.lexema, 'String[]', 'Parámetro', arg);
+            }
+        } else {
+            if (this.tipoActual === 'TIPO') this.analizarParametros();
+        }
+
+        this.esperar('DELIM', ')');
+        this.esperar('DELIM', '{');
+        this.analizarCuerpoMetodo();
         this.esperar('DELIM', '}');
+        this.contexto.metodoActual = null;
     }
 
     analizarParametros() {
+        const tTipo = this.tokenActual;
         this.esperar('TIPO');
+        const tId = this.tokenActual;
         this.esperar('ID');
-        
+        if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Parámetro', tId);
+
         while (this.coincidir('DELIM', ',')) {
+            const tTipo2 = this.tokenActual;
             this.esperar('TIPO');
+            const tId2 = this.tokenActual;
             this.esperar('ID');
+            if(tId2) this.registrarSimbolo(tId2.lexema, tTipo2.lexema, 'Parámetro', tId2);
+        }
+    }
+
+    analizarCuerpoMetodo() {
+        while (this.tokenActual && this.lexemaActual !== '}') {
+            try {
+                this.analizarSentencia();
+            } catch (e) {
+                if (e.message === "LIMITE_ERRORES_ALCANZADO") throw e;
+                this.recuperar();
+            }
         }
     }
 
     analizarSentencia() {
+        // Declaración de variable simple: int x = ...
         if (this.tipoActual === 'TIPO' && this.mirarSiguiente(1)?.tipo === 'ID') {
             this.analizarDeclaracion();
         }
-        else if (this.tipoActual === 'ID' && this.mirarSiguiente(1)?.tipo === 'ID' && 
-                this.mirarSiguiente(2)?.lexema !== '(') {
+        // Declaración de Objeto: Persona p = ...
+        else if (this.tipoActual === 'ID' && this.mirarSiguiente(1)?.tipo === 'ID') {
             this.analizarDeclaracionObjeto();
         }
+        // System.out.println
         else if (this.lexemaActual === 'System.out.println') {
-            this.analizarPrint();
+            this.esperar('PRINT');
+            this.esperar('DELIM', '(');
+            this.analizarExpresion();
+            this.esperar('DELIM', ')');
+            this.esperar('DELIM', ';');
         }
+        // Return
         else if (this.lexemaActual === 'return') {
-            this.analizarReturn();
+            this.esperar('PR', 'return');
+            this.analizarExpresion();
+            this.esperar('DELIM', ';');
         }
+        // Sentencias que empiezan con ID (Asignaciones o llamadas)
         else if (this.tipoActual === 'ID') {
             this.analizarSentenciaID();
         }
+        // This.propiedad = ...
         else if (this.lexemaActual === 'this') {
-            this.analizarSentenciaAsignacionThis();
+            this.esperar('PR', 'this');
+            this.esperar('DELIM', '.');
+            this.esperar('ID');
+            this.esperar('OP_ASIGN', '=');
+            this.esperar('ID');
+            this.esperar('DELIM', ';');
         }
         else {
             this.error("Sentencia no reconocida");
@@ -536,160 +457,89 @@ class AnalizadorSintactico {
     }
 
     analizarDeclaracion() {
+        const tTipo = this.tokenActual;
         this.esperar('TIPO');
+        const tId = this.tokenActual;
         this.esperar('ID');
-        
+        if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Variable Local', tId);
+
         if (this.coincidir('OP_ASIGN', '=')) {
             this.analizarExpresion();
         }
-        
         this.esperar('DELIM', ';');
     }
 
     analizarDeclaracionObjeto() {
+        const tTipo = this.tokenActual;
         this.esperar('ID');
+        const tId = this.tokenActual;
         this.esperar('ID');
-        
+        if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Variable Local (Objeto)', tId);
+
         if (this.coincidir('OP_ASIGN', '=')) {
-            this.esperar('PR', 'new');
-            this.esperar('ID');
-            this.esperar('DELIM', '(');
-            
-            if (this.tipoActual !== 'DELIM' || this.lexemaActual !== ')') {
-                this.analizarArgumentos();
-            }
-            
-            this.esperar('DELIM', ')');
+            // Consumimos perezosamente hasta el ; para saltar el "new Persona(...)"
+            while(this.tokenActual && this.lexemaActual !== ';') this.avanzar();
         }
-        
         this.esperar('DELIM', ';');
     }
 
     analizarSentenciaID() {
         this.esperar('ID');
-        
-        const siguiente = this.tokenActual;
-        
-        if (siguiente?.lexema === '=') {
+        const sig = this.tokenActual;
+
+        // Asignación: x = 10;
+        if (sig?.lexema === '=') {
             this.avanzar();
             this.analizarExpresion();
             this.esperar('DELIM', ';');
         }
-        else if (siguiente?.lexema === '.') {
-            this.avanzar();
-            this.esperar('ID');
-            this.esperar('DELIM', '(');
-            
-            if (this.tipoActual !== 'DELIM' || this.lexemaActual !== ')') {
-                this.analizarArgumentos();
-            }
-            
-            this.esperar('DELIM', ')');
-            this.esperar('DELIM', ';');
-        }
-        else if (siguiente?.lexema === '(') {
-            this.avanzar();
-            
-            if (this.tipoActual !== 'DELIM' || this.lexemaActual !== ')') {
-                this.analizarArgumentos();
-            }
-            
-            this.esperar('DELIM', ')');
+        // Llamada o acceso: x.metodo() o x.propiedad...
+        else if (sig?.lexema === '.' || sig?.lexema === '(') {
+            // Consumo perezoso hasta ;
+            while(this.tokenActual && this.lexemaActual !== ';') this.avanzar();
             this.esperar('DELIM', ';');
         }
         else {
-            this.error("Sentencia inválida que comienza con ID");
+            this.error("Uso de identificador no válido como sentencia");
         }
     }
 
-    analizarReturn() {
-        this.esperar('PR', 'return');
-        this.analizarExpresion();
-        this.esperar('DELIM', ';');
-    }
-
-    analizarPrint() {
-        this.esperar('PRINT');
-        this.esperar('DELIM', '(');
-        this.analizarExpresion();
-        this.esperar('DELIM', ')');
-        this.esperar('DELIM', ';');
-    }
-
-    analizarArgumentos() {
-        this.analizarExpresion();
-        
-        while (this.coincidir('DELIM', ',')) {
-            this.analizarExpresion();
-        }
-    }
-
+    // --- CORRECCIÓN CLAVE AQUÍ ---
     analizarExpresion() {
-        this.analizarExpresionSimple();
-        
-        if (this.tipoActual === 'OP_ARIT' && this.lexemaActual === '+') {
-            this.analizarExpresionConcatenacion();
-        }
-    }
+        let parentesisAbiertos = 0;
 
-    analizarExpresionSimple() {
-        if (this.tipoActual === 'ID' || this.tipoActual === 'ENTERO' || 
-            this.tipoActual === 'REAL' || this.tipoActual === 'CADENA' || 
-            this.tipoActual === 'CARACTER') {
-            
-            if (this.tipoActual === 'ID' && this.mirarSiguiente()?.lexema === '.') {
-                this.analizarLlamadaMetodoExpresion();
-            } else {
-                this.avanzar();
+        // Consumimos tokens hasta encontrar un ';' o un ')' QUE NO sea de cierre de anidamiento
+        while (this.tokenActual) {
+            if (this.lexemaActual === ';') {
+                break; // Fin de sentencia
             }
-        } else {
-            this.error("Se esperaba una expresión simple (ID, número, cadena o carácter)");
-        }
-    }
 
-    analizarExpresionConcatenacion() {
-        while (this.coincidir('OP_ARIT', '+')) {
-            this.analizarExpresionSimple();
-        }
-    }
+            if (this.lexemaActual === '(') {
+                parentesisAbiertos++;
+            }
+            else if (this.lexemaActual === ')') {
+                if (parentesisAbiertos > 0) {
+                    parentesisAbiertos--; // Cierra paréntesis interno (ej: metodo())
+                } else {
+                    break; // Es el paréntesis de cierre del println o if
+                }
+            }
 
-    analizarLlamadaMetodoExpresion() {
-        this.esperar('ID');
-        
-        while (this.coincidir('DELIM', '.')) {
-            this.esperar('ID');
+            this.avanzar();
         }
-        
-        this.esperar('DELIM', '(');
-        
-        if (this.tipoActual !== 'DELIM' || this.lexemaActual !== ')') {
-            this.analizarArgumentos();
-        }
-        
-        this.esperar('DELIM', ')');
-    }
-
-    analizarSentenciaAsignacionThis() {
-        this.esperar('PR', 'this');
-        this.esperar('DELIM', '.');
-        this.esperar('ID');
-        this.esperar('OP_ASIGN', '=');
-        this.esperar('ID');
-        this.esperar('DELIM', ';');
     }
 }
 
-// ========== FUNCIONES DE INTERFAZ ==========
+// ==========================================
+// 3. INTERFAZ DE USUARIO
+// ==========================================
+
 function llenarTablaLexemas(tokens) {
     const tbody = document.querySelector('#tabla-lexemas tbody');
     tbody.innerHTML = '';
-    
     tokens.forEach(token => {
         const fila = document.createElement('tr');
-        fila.innerHTML = `
-            <td>${escapeHtml(token.lexema)}</td>
-            <td>${token.tipo}</td>
-        `;
+        fila.innerHTML = `<td>${escapeHtml(token.lexema)}</td><td>${token.tipo}</td>`;
         tbody.appendChild(fila);
     });
 }
@@ -697,37 +547,31 @@ function llenarTablaLexemas(tokens) {
 function llenarTablaErrores(errores) {
     const tbody = document.querySelector('#tabla-errores tbody');
     tbody.innerHTML = '';
-    
     if (errores.length === 0) {
-        const fila = document.createElement('tr');
-        fila.innerHTML = `<td>No se encontraron errores léxicos</td>`;
-        tbody.appendChild(fila);
+        tbody.innerHTML = `<tr><td>No se encontraron errores</td></tr>`;
     } else {
         errores.forEach(error => {
             const fila = document.createElement('tr');
-            fila.innerHTML = `
-                <td class="error">Línea ${error.linea}, Columna ${error.columna}: ${error.descripcion}</td>
-            `;
+            fila.innerHTML = `<td class="error">L${error.linea}, C${error.columna}: ${error.mensaje || error.descripcion}</td>`;
             tbody.appendChild(fila);
         });
     }
 }
 
-function llenarTablaSimbolos(simbolos) {
+function llenarTablaSimbolos(listaSimbolos) {
     const tbody = document.querySelector('#tabla-simbolos tbody');
     tbody.innerHTML = '';
-    
-    if (simbolos.size === 0) {
-        const fila = document.createElement('tr');
-        fila.innerHTML = `<td colspan="4">No se encontraron símbolos</td>`;
-        tbody.appendChild(fila);
+
+    if (!listaSimbolos || listaSimbolos.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4">No se encontraron declaraciones de símbolos</td></tr>`;
     } else {
-        simbolos.forEach((info, identificador) => {
+        listaSimbolos.forEach(info => {
             const fila = document.createElement('tr');
+            // Aquí mostramos Identificador | Tipo de Dato (o Retorno) | Contexto | Posición
             fila.innerHTML = `
-                <td>${identificador}</td>
-                <td>${info.tipo || 'desconocido'}</td>
-                <td>${info.valor || ''}</td>
+                <td><b>${info.identificador}</b></td>
+                <td><span class="badge-tipo">${info.tipo}</span></td>
+                <td>${info.contexto}</td>
                 <td>L${info.linea}C${info.columna}</td>
             `;
             tbody.appendChild(fila);
@@ -738,55 +582,58 @@ function llenarTablaSimbolos(simbolos) {
 function mostrarResultadoSintactico(erroresSintacticos) {
     const resultadoDiv = document.getElementById('resultado-sintactico');
     resultadoDiv.innerHTML = '';
-    
+
     if (erroresSintacticos.length === 0) {
-        resultadoDiv.innerHTML = `<div class="success">Análisis sintáctico completado sin errores</div>`;
+        resultadoDiv.innerHTML = `<div class="success">Análisis sintáctico completado sin errores.</div>`;
     } else {
-        let html = `<div class="error">Se encontraron ${erroresSintacticos.length} error(es) sintáctico(s):</div><ul>`;
+        let mensajeExtra = "";
+        if (erroresSintacticos.length >= 2) {
+            mensajeExtra = "<br><strong>(Se detuvo el análisis tras alcanzar 2 errores)</strong>";
+        }
+
+        let html = `<div class="error">Errores Sintácticos Encontrados:${mensajeExtra}</div><ul>`;
         erroresSintacticos.forEach(error => {
-            html += `<li class="error">Línea ${error.linea}, Columna ${error.columna}: ${error.mensaje}<br>
-                    <small>Token encontrado: ${error.tokenEncontrado}</small></li>`;
+            html += `<li class="error">Línea ${error.linea}, Columna ${error.columna}: ${error.mensaje}<br><small>Token encontrado: ${error.tokenEncontrado}</small></li>`;
         });
         html += '</ul>';
         resultadoDiv.innerHTML = html;
     }
 }
 
-// ========== FUNCIÓN PRINCIPAL ==========
 function ejecutarAnalisis() {
     const codigo = document.getElementById('editor-codigo').value;
-    
     limpiarTablas();
-    
-    if (!codigo.trim()) {
-        document.getElementById('resultado-analisis').innerHTML = 
-            '<div class="error">Por favor, ingresa código para analizar</div>';
-        return;
-    }
-    
-    document.getElementById('resultado-analisis').innerHTML = '<div>Analizando código...</div>';
-    
+
+    if (!codigo.trim()) return;
+
+    document.getElementById('resultado-analisis').innerHTML = '<div>Analizando...</div>';
+
     setTimeout(() => {
+        // 1. Léxico
         const resultadoLexico = analizadorLexico(codigo);
-        inferirTipos(resultadoLexico.tokens, resultadoLexico.simbolos);
-        
         llenarTablaLexemas(resultadoLexico.tokens);
-        llenarTablaErrores(resultadoLexico.errores);
-        llenarTablaSimbolos(resultadoLexico.simbolos);
-        
+
         if (resultadoLexico.errores.length > 0) {
-            document.getElementById('resultado-analisis').innerHTML = 
-                `<div class="error">Análisis léxico completado con ${resultadoLexico.errores.length} error(es)</div>`;
+            llenarTablaErrores(resultadoLexico.errores);
+            document.getElementById('resultado-analisis').innerHTML = `<div class="error">Errores Léxicos encontrados (Corrija antes de pasar al sintáctico)</div>`;
+            return;
+        }
+
+        // 2. Sintáctico (Ahora con recuperación de errores)
+        const parser = new AnalizadorSintactico(resultadoLexico.tokens);
+        const resultadoSintactico = parser.analizarPrograma();
+
+        // 3. Resultados
+        llenarTablaSimbolos(resultadoSintactico.simbolos);
+        llenarTablaErrores(resultadoSintactico.errores); // Tabla general de errores
+        mostrarResultadoSintactico(resultadoSintactico.errores); // Resumen arriba
+
+        if (resultadoSintactico.errores.length === 0) {
+            document.getElementById('resultado-analisis').innerHTML = `<div class="success">Análisis Finalizado Correctamente.</div>`;
         } else {
-            document.getElementById('resultado-analisis').innerHTML = 
-                `<div class="success">Análisis léxico completado. ${resultadoLexico.tokens.length} tokens encontrados.</div>`;
+            document.getElementById('resultado-analisis').innerHTML = `<div class="error">Análisis finalizado con errores.</div>`;
         }
-        
-        if (resultadoLexico.errores.length === 0) {
-            const parser = new AnalizadorSintactico(resultadoLexico.tokens);
-            const erroresSintacticos = parser.analizarPrograma();
-            mostrarResultadoSintactico(erroresSintacticos);
-        }
+
     }, 100);
 }
 
