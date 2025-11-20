@@ -158,7 +158,7 @@ class AnalizadorSintactico {
         this.posicion = 0;
         this.errores = [];
         this.tablaSimbolos = [];
-        this.MAX_ERRORES = 2; // Límite de errores a mostrar
+        this.MAX_ERRORES = 2;
         this.contexto = {
             claseActual: null,
             metodoActual: null
@@ -185,7 +185,6 @@ class AnalizadorSintactico {
     error(mensaje) {
         const token = this.tokenActual || { linea: '?', columna: '?', tipo: 'EOF', lexema: 'EOF' };
 
-        // Evitar duplicar el mismo error en la misma posición
         const ultimoError = this.errores[this.errores.length - 1];
         if (ultimoError && ultimoError.linea === token.linea && ultimoError.columna === token.columna) {
             return;
@@ -206,7 +205,6 @@ class AnalizadorSintactico {
     }
 
     recuperar() {
-        // Palabras que indican el inicio de una nueva sentencia segura
         const tokensSincronizacion = [
             'class', 'public', 'private', 'protected',
             'void', 'static', 'int', 'String', 'boolean',
@@ -216,21 +214,16 @@ class AnalizadorSintactico {
         while (this.tokenActual) {
             const lexema = this.lexemaActual;
 
-            // 1. Si hallamos punto y coma, consumimos y estamos listos
             if (lexema === ';') {
                 this.avanzar();
                 return;
             }
-            // 2. Si hallamos llaves, NO consumimos, paramos para que el bloque se maneje solo
             if (lexema === '{' || lexema === '}') {
                 return;
             }
-            // 3. Si hallamos inicio de otra sentencia, paramos
             if (tokensSincronizacion.includes(lexema)) {
                 return;
             }
-
-            // Si es basura, la saltamos
             this.avanzar();
         }
     }
@@ -276,7 +269,6 @@ class AnalizadorSintactico {
                 } else {
                     if(this.tokenActual) {
                         this.error("Código fuera de la estructura de clase");
-                        // Forzar avance si recuperar no avanzó para evitar bucle infinito
                         if (this.tokenActual && !['class', 'public', 'private'].includes(this.lexemaActual)) {
                             this.avanzar();
                         }
@@ -295,10 +287,9 @@ class AnalizadorSintactico {
         if (this.lexemaActual !== 'class') {
             this.error("Se esperaba la palabra reservada 'class'");
             this.contexto.claseActual = "Clase_Sin_Definicion";
-            // Recuperación agresiva: buscar la apertura de la clase
             while (this.tokenActual && this.lexemaActual !== '{') this.avanzar();
         } else {
-            this.avanzar(); // Consumir 'class'
+            this.avanzar();
             const tokenClase = this.tokenActual;
             this.esperar('ID');
 
@@ -317,7 +308,6 @@ class AnalizadorSintactico {
                 this.analizarMiembro();
             } catch (e) {
                 if (e.message === "LIMITE_ERRORES_ALCANZADO") throw e;
-                // Si hubo error en un miembro, recuperar() ya nos dejó listos para el siguiente
             }
         }
         this.esperar('DELIM', '}');
@@ -373,7 +363,6 @@ class AnalizadorSintactico {
         this.esperar('MOD_ACCESO');
 
         let tipoRetorno = "";
-
         if (this.lexemaActual === 'static') {
             this.avanzar();
             this.esperar('PR', 'void');
@@ -399,7 +388,6 @@ class AnalizadorSintactico {
         }
 
         this.esperar('DELIM', '(');
-
         if (this.contexto.metodoActual === 'main') {
             if (this.lexemaActual === 'String') {
                 this.esperar('TIPO', 'String');
@@ -411,7 +399,6 @@ class AnalizadorSintactico {
         } else {
             if (this.tipoActual === 'TIPO') this.analizarParametros();
         }
-
         this.esperar('DELIM', ')');
         this.esperar('DELIM', '{');
         this.analizarCuerpoMetodo();
@@ -458,7 +445,13 @@ class AnalizadorSintactico {
         } else if (this.tipoActual === 'ID') {
             this.analizarSentenciaID();
         } else if (this.lexemaActual === 'this') {
-            this.esperar('PR', 'this'); this.esperar('DELIM', '.'); this.esperar('ID'); this.esperar('OP_ASIGN', '='); this.esperar('ID'); this.esperar('DELIM', ';');
+            // === CORREGIDO: Usar analizarExpresion para el lado derecho ===
+            this.esperar('PR', 'this');
+            this.esperar('DELIM', '.');
+            this.esperar('ID');
+            this.esperar('OP_ASIGN', '=');
+            this.analizarExpresion(); // Antes esperaba ID ciegamente
+            this.esperar('DELIM', ';');
         } else {
             this.error("Sentencia no reconocida");
         }
@@ -482,8 +475,10 @@ class AnalizadorSintactico {
         const tId = this.tokenActual;
         this.esperar('ID');
         if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Variable Local (Objeto)', tId);
+
         if (this.coincidir('OP_ASIGN', '=')) {
-            while(this.tokenActual && this.lexemaActual !== ';') this.avanzar();
+            // === CORREGIDO: Usar analizarExpresion en vez de while ===
+            this.analizarExpresion();
         }
         this.esperar('DELIM', ';');
     }
@@ -497,7 +492,9 @@ class AnalizadorSintactico {
             this.esperar('DELIM', ';');
         }
         else if (sig?.lexema === '.' || sig?.lexema === '(') {
-            while(this.tokenActual && this.lexemaActual !== ';') this.avanzar();
+            // === CORREGIDO: Usar analizarExpresion en vez de while ===
+            // Esto permite llamar metodos tipo objeto.metodo() y parar si falta ;
+            this.analizarExpresion();
             this.esperar('DELIM', ';');
         }
         else {
@@ -505,15 +502,13 @@ class AnalizadorSintactico {
         }
     }
 
-    // === AQUÍ ESTÁ EL CAMBIO IMPORTANTE ===
     analizarExpresion() {
         let parentesisAbiertos = 0;
-
-        // Tokens que indican que la expresión DEBE terminar forzosamente (aunque no haya ;)
+        // Tokens que indican parada SEGURA
         const tokensDeParada = ['}', ';', 'public', 'private', 'protected', 'return', 'if', 'while', 'for'];
 
         while (this.tokenActual) {
-            // Si encontramos una señal de parada y no hay paréntesis abiertos, abortamos la expresión
+            // Si vemos un token de parada y no hay paréntesis pendientes, terminamos la expresión
             if (parentesisAbiertos === 0 && tokensDeParada.includes(this.lexemaActual)) {
                 break;
             }
@@ -521,7 +516,7 @@ class AnalizadorSintactico {
             if (this.lexemaActual === '(') parentesisAbiertos++;
             else if (this.lexemaActual === ')') {
                 if (parentesisAbiertos > 0) parentesisAbiertos--;
-                else break; // Paréntesis de cierre extra (ej: fin del println)
+                else break; // Cierre extra
             }
 
             this.avanzar();
