@@ -149,13 +149,16 @@ function analizadorLexico(codigo) {
     return { tokens, errores };
 }
 
+// ==========================================
+// 2. ANALIZADOR SINTÁCTICO (PARSER)
+// ==========================================
 class AnalizadorSintactico {
     constructor(tokens) {
         this.tokens = tokens;
         this.posicion = 0;
         this.errores = [];
         this.tablaSimbolos = [];
-        this.MAX_ERRORES = 2;
+        this.MAX_ERRORES = 2; // Límite de errores a mostrar
         this.contexto = {
             claseActual: null,
             metodoActual: null
@@ -181,6 +184,13 @@ class AnalizadorSintactico {
     // --- Manejo de Errores ---
     error(mensaje) {
         const token = this.tokenActual || { linea: '?', columna: '?', tipo: 'EOF', lexema: 'EOF' };
+
+        // Evitar duplicar el mismo error en la misma posición
+        const ultimoError = this.errores[this.errores.length - 1];
+        if (ultimoError && ultimoError.linea === token.linea && ultimoError.columna === token.columna) {
+            return;
+        }
+
         this.errores.push({
             linea: token.linea,
             columna: token.columna,
@@ -196,14 +206,31 @@ class AnalizadorSintactico {
     }
 
     recuperar() {
-        // Saltar hasta encontrar un punto y coma o llaves para intentar sincronizar
-        while (this.tokenActual &&
-        this.lexemaActual !== ';' &&
-        this.lexemaActual !== '}' &&
-        this.lexemaActual !== '{') {
-            this.avanzar();
-        }
-        if (this.tokenActual && this.lexemaActual === ';') {
+        // Palabras que indican el inicio de una nueva sentencia segura
+        const tokensSincronizacion = [
+            'class', 'public', 'private', 'protected',
+            'void', 'static', 'int', 'String', 'boolean',
+            'return', 'if', 'else', 'while', 'for', '@Override'
+        ];
+
+        while (this.tokenActual) {
+            const lexema = this.lexemaActual;
+
+            // 1. Si hallamos punto y coma, consumimos y estamos listos
+            if (lexema === ';') {
+                this.avanzar();
+                return;
+            }
+            // 2. Si hallamos llaves, NO consumimos, paramos para que el bloque se maneje solo
+            if (lexema === '{' || lexema === '}') {
+                return;
+            }
+            // 3. Si hallamos inicio de otra sentencia, paramos
+            if (tokensSincronizacion.includes(lexema)) {
+                return;
+            }
+
+            // Si es basura, la saltamos
             this.avanzar();
         }
     }
@@ -224,21 +251,13 @@ class AnalizadorSintactico {
         }
     }
 
-    // --- Registro de Símbolos ---
     registrarSimbolo(lexema, tipoDato, categoria, tokenRef) {
         let contextoDesc = "";
-
-        if (categoria === 'Clase') {
-            contextoDesc = "Definición de Clase";
-        } else if (categoria === 'Atributo') {
-            contextoDesc = `Atributo de clase '${this.contexto.claseActual}'`;
-        } else if (categoria === 'Método') {
-            contextoDesc = `Método de la clase '${this.contexto.claseActual}'`;
-        } else if (categoria === 'Parámetro') {
-            contextoDesc = `Parámetro del método '${this.contexto.metodoActual}'`;
-        } else if (categoria === 'Variable Local' || categoria.includes('Variable')) {
-            contextoDesc = `Variable local en método '${this.contexto.metodoActual}'`;
-        }
+        if (categoria === 'Clase') contextoDesc = "Definición de Clase";
+        else if (categoria === 'Atributo') contextoDesc = `Atributo de clase '${this.contexto.claseActual}'`;
+        else if (categoria === 'Método') contextoDesc = `Método de la clase '${this.contexto.claseActual}'`;
+        else if (categoria === 'Parámetro') contextoDesc = `Parámetro del método '${this.contexto.metodoActual}'`;
+        else if (categoria.includes('Variable')) contextoDesc = `Variable local en método '${this.contexto.metodoActual}'`;
 
         this.tablaSimbolos.push({
             identificador: lexema,
@@ -255,8 +274,13 @@ class AnalizadorSintactico {
                 if (this.lexemaActual === 'class' || this.tipoActual === 'MOD_ACCESO') {
                     this.analizarClase();
                 } else {
-                    // Ignorar basura fuera de clase si no es EOF
-                    if(this.tokenActual) this.error("Código fuera de la clase");
+                    if(this.tokenActual) {
+                        this.error("Código fuera de la estructura de clase");
+                        // Forzar avance si recuperar no avanzó para evitar bucle infinito
+                        if (this.tokenActual && !['class', 'public', 'private'].includes(this.lexemaActual)) {
+                            this.avanzar();
+                        }
+                    }
                 }
             }
         } catch (e) {
@@ -267,13 +291,23 @@ class AnalizadorSintactico {
 
     analizarClase() {
         if (this.tipoActual === 'MOD_ACCESO') this.avanzar();
-        this.esperar('PR', 'class');
 
-        const tokenClase = this.tokenActual;
-        this.esperar('ID');
-        if(tokenClase) {
-            this.contexto.claseActual = tokenClase.lexema;
-            this.registrarSimbolo(tokenClase.lexema, 'class', 'Clase', tokenClase);
+        if (this.lexemaActual !== 'class') {
+            this.error("Se esperaba la palabra reservada 'class'");
+            this.contexto.claseActual = "Clase_Sin_Definicion";
+            // Recuperación agresiva: buscar la apertura de la clase
+            while (this.tokenActual && this.lexemaActual !== '{') this.avanzar();
+        } else {
+            this.avanzar(); // Consumir 'class'
+            const tokenClase = this.tokenActual;
+            this.esperar('ID');
+
+            if(tokenClase && tokenClase.tipo === 'ID') {
+                this.contexto.claseActual = tokenClase.lexema;
+                this.registrarSimbolo(tokenClase.lexema, 'class', 'Clase', tokenClase);
+            } else {
+                this.contexto.claseActual = "Clase_Sin_Nombre";
+            }
         }
 
         this.esperar('DELIM', '{');
@@ -283,27 +317,24 @@ class AnalizadorSintactico {
                 this.analizarMiembro();
             } catch (e) {
                 if (e.message === "LIMITE_ERRORES_ALCANZADO") throw e;
-                // Si falla un miembro, recuperar ya se ejecutó, intentamos con el siguiente
+                // Si hubo error en un miembro, recuperar() ya nos dejó listos para el siguiente
             }
         }
         this.esperar('DELIM', '}');
     }
 
     analizarMiembro() {
-        // Atributos
         if (this.tipoActual === 'MOD_ACCESO' &&
             this.mirarSiguiente(1)?.tipo === 'TIPO' &&
             this.mirarSiguiente(2)?.tipo === 'ID' &&
             this.mirarSiguiente(3)?.lexema === ';') {
             this.analizarAtributo();
         }
-        // Constructores
         else if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') &&
             this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 1 : 0)?.tipo === 'ID' &&
             this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 2 : 1)?.lexema === '(') {
             this.analizarConstructor();
         }
-        // Métodos
         else if (this.lexemaActual === '@Override' ||
             (this.tipoActual === 'MOD_ACCESO' &&
                 (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void' || this.mirarSiguiente(1)?.lexema === 'static'))) {
@@ -320,7 +351,7 @@ class AnalizadorSintactico {
         this.esperar('TIPO');
         const tId = this.tokenActual;
         this.esperar('ID');
-        if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Atributo', tId);
+        if(tId && tTipo) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Atributo', tId);
         this.esperar('DELIM', ';');
     }
 
@@ -343,7 +374,6 @@ class AnalizadorSintactico {
 
         let tipoRetorno = "";
 
-        // Manejo de static void main vs void normal vs tipo normal
         if (this.lexemaActual === 'static') {
             this.avanzar();
             this.esperar('PR', 'void');
@@ -363,12 +393,13 @@ class AnalizadorSintactico {
             const tokenMetodo = this.tokenActual;
             this.esperar('ID');
             this.contexto.metodoActual = tokenMetodo ? tokenMetodo.lexema : 'anonimo';
-            if(tokenMetodo) this.registrarSimbolo(tokenMetodo.lexema, tipoRetorno, 'Método', tokenMetodo);
+            if(tokenMetodo && tokenMetodo.tipo === 'ID') {
+                this.registrarSimbolo(tokenMetodo.lexema, tipoRetorno, 'Método', tokenMetodo);
+            }
         }
 
         this.esperar('DELIM', '(');
 
-        // Parámetros (special case main)
         if (this.contexto.metodoActual === 'main') {
             if (this.lexemaActual === 'String') {
                 this.esperar('TIPO', 'String');
@@ -416,42 +447,19 @@ class AnalizadorSintactico {
     }
 
     analizarSentencia() {
-        // Declaración de variable simple: int x = ...
         if (this.tipoActual === 'TIPO' && this.mirarSiguiente(1)?.tipo === 'ID') {
             this.analizarDeclaracion();
-        }
-        // Declaración de Objeto: Persona p = ...
-        else if (this.tipoActual === 'ID' && this.mirarSiguiente(1)?.tipo === 'ID') {
+        } else if (this.tipoActual === 'ID' && this.mirarSiguiente(1)?.tipo === 'ID') {
             this.analizarDeclaracionObjeto();
-        }
-        // System.out.println
-        else if (this.lexemaActual === 'System.out.println') {
-            this.esperar('PRINT');
-            this.esperar('DELIM', '(');
-            this.analizarExpresion();
-            this.esperar('DELIM', ')');
-            this.esperar('DELIM', ';');
-        }
-        // Return
-        else if (this.lexemaActual === 'return') {
-            this.esperar('PR', 'return');
-            this.analizarExpresion();
-            this.esperar('DELIM', ';');
-        }
-        // Sentencias que empiezan con ID (Asignaciones o llamadas)
-        else if (this.tipoActual === 'ID') {
+        } else if (this.lexemaActual === 'System.out.println') {
+            this.esperar('PRINT'); this.esperar('DELIM', '('); this.analizarExpresion(); this.esperar('DELIM', ')'); this.esperar('DELIM', ';');
+        } else if (this.lexemaActual === 'return') {
+            this.esperar('PR', 'return'); this.analizarExpresion(); this.esperar('DELIM', ';');
+        } else if (this.tipoActual === 'ID') {
             this.analizarSentenciaID();
-        }
-        // This.propiedad = ...
-        else if (this.lexemaActual === 'this') {
-            this.esperar('PR', 'this');
-            this.esperar('DELIM', '.');
-            this.esperar('ID');
-            this.esperar('OP_ASIGN', '=');
-            this.esperar('ID');
-            this.esperar('DELIM', ';');
-        }
-        else {
+        } else if (this.lexemaActual === 'this') {
+            this.esperar('PR', 'this'); this.esperar('DELIM', '.'); this.esperar('ID'); this.esperar('OP_ASIGN', '='); this.esperar('ID'); this.esperar('DELIM', ';');
+        } else {
             this.error("Sentencia no reconocida");
         }
     }
@@ -462,7 +470,6 @@ class AnalizadorSintactico {
         const tId = this.tokenActual;
         this.esperar('ID');
         if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Variable Local', tId);
-
         if (this.coincidir('OP_ASIGN', '=')) {
             this.analizarExpresion();
         }
@@ -475,9 +482,7 @@ class AnalizadorSintactico {
         const tId = this.tokenActual;
         this.esperar('ID');
         if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Variable Local (Objeto)', tId);
-
         if (this.coincidir('OP_ASIGN', '=')) {
-            // Consumimos perezosamente hasta el ; para saltar el "new Persona(...)"
             while(this.tokenActual && this.lexemaActual !== ';') this.avanzar();
         }
         this.esperar('DELIM', ';');
@@ -486,16 +491,12 @@ class AnalizadorSintactico {
     analizarSentenciaID() {
         this.esperar('ID');
         const sig = this.tokenActual;
-
-        // Asignación: x = 10;
         if (sig?.lexema === '=') {
             this.avanzar();
             this.analizarExpresion();
             this.esperar('DELIM', ';');
         }
-        // Llamada o acceso: x.metodo() o x.propiedad...
         else if (sig?.lexema === '.' || sig?.lexema === '(') {
-            // Consumo perezoso hasta ;
             while(this.tokenActual && this.lexemaActual !== ';') this.avanzar();
             this.esperar('DELIM', ';');
         }
@@ -504,25 +505,23 @@ class AnalizadorSintactico {
         }
     }
 
-    // --- CORRECCIÓN CLAVE AQUÍ ---
+    // === AQUÍ ESTÁ EL CAMBIO IMPORTANTE ===
     analizarExpresion() {
         let parentesisAbiertos = 0;
 
-        // Consumimos tokens hasta encontrar un ';' o un ')' QUE NO sea de cierre de anidamiento
+        // Tokens que indican que la expresión DEBE terminar forzosamente (aunque no haya ;)
+        const tokensDeParada = ['}', ';', 'public', 'private', 'protected', 'return', 'if', 'while', 'for'];
+
         while (this.tokenActual) {
-            if (this.lexemaActual === ';') {
-                break; // Fin de sentencia
+            // Si encontramos una señal de parada y no hay paréntesis abiertos, abortamos la expresión
+            if (parentesisAbiertos === 0 && tokensDeParada.includes(this.lexemaActual)) {
+                break;
             }
 
-            if (this.lexemaActual === '(') {
-                parentesisAbiertos++;
-            }
+            if (this.lexemaActual === '(') parentesisAbiertos++;
             else if (this.lexemaActual === ')') {
-                if (parentesisAbiertos > 0) {
-                    parentesisAbiertos--; // Cierra paréntesis interno (ej: metodo())
-                } else {
-                    break; // Es el paréntesis de cierre del println o if
-                }
+                if (parentesisAbiertos > 0) parentesisAbiertos--;
+                else break; // Paréntesis de cierre extra (ej: fin del println)
             }
 
             this.avanzar();
