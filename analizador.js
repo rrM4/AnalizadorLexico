@@ -158,7 +158,7 @@ class AnalizadorSintactico {
         this.posicion = 0;
         this.errores = [];
         this.tablaSimbolos = [];
-        this.MAX_ERRORES = 2;
+        this.MAX_ERRORES = 5; // Aumentado un poco para ver más detalles si es necesario
         this.contexto = {
             claseActual: null,
             metodoActual: null
@@ -187,7 +187,7 @@ class AnalizadorSintactico {
 
         const ultimoError = this.errores[this.errores.length - 1];
         if (ultimoError && ultimoError.linea === token.linea && ultimoError.columna === token.columna) {
-            // Si el error es repetido, forzamos un avance para romper bucles infinitos
+            // Si estamos atascados en el mismo token, forzamos avance
             this.avanzar();
             return;
         }
@@ -206,16 +206,20 @@ class AnalizadorSintactico {
         }
     }
 
+    // === RECUPERACIÓN MEJORADA ===
     recuperar() {
         const tokensSincronizacion = [
             'class', 'public', 'private', 'protected',
             'void', 'static', 'int', 'String', 'boolean',
-            'return', 'if', 'else', 'while', 'for', '@Override'
+            'return', 'if', 'else', 'while', 'for', '@Override',
+            'this' // Importante para el constructor
         ];
 
         while (this.tokenActual) {
             const lexema = this.lexemaActual;
+            const tipo = this.tipoActual;
 
+            // 1. Si encontramos ';' o llaves, paramos (ya estamos sincronizados o en fin de bloque)
             if (lexema === ';') {
                 this.avanzar();
                 return;
@@ -223,9 +227,19 @@ class AnalizadorSintactico {
             if (lexema === '{' || lexema === '}') {
                 return;
             }
+
+            // 2. Palabras clave de inicio de sentencia
             if (tokensSincronizacion.includes(lexema)) {
                 return;
             }
+
+            // 3. HEURÍSTICA: Detectar declaración de objeto (Tipo Nombre)
+            // Si vemos un ID seguido de otro ID, probablemente es "Persona persona2", así que paramos.
+            const siguiente = this.mirarSiguiente(1);
+            if (tipo === 'ID' && siguiente && siguiente.tipo === 'ID') {
+                return;
+            }
+
             this.avanzar();
         }
     }
@@ -310,48 +324,41 @@ class AnalizadorSintactico {
                 this.analizarMiembro();
             } catch (e) {
                 if (e.message === "LIMITE_ERRORES_ALCANZADO") throw e;
-                // Recuperar ya se llamó, seguimos intentando con el siguiente token
             }
         }
         this.esperar('DELIM', '}');
     }
 
-    // === AQUÍ ESTABA EL PROBLEMA DE LOS ATRIBUTOS ===
     analizarMiembro() {
-        // 1. Primero verificamos si es un Constructor (Clase(...) { )
+        // Constructor
         if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') &&
             this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 1 : 0)?.tipo === 'ID' &&
             this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 2 : 1)?.lexema === '(') {
             this.analizarConstructor();
         }
-        // 2. Verificamos si es un Método (@Override o tiene paréntesis después del ID)
+        // Método (@Override o con paréntesis)
         else if (this.lexemaActual === '@Override' ||
             (this.tipoActual === 'MOD_ACCESO' &&
                 (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void' || this.mirarSiguiente(1)?.lexema === 'static') &&
-                // IMPORTANTE: Un método DEBE tener '(' después del nombre.
-                // ModAcceso + Tipo + Nombre + '('
                 this.mirarSiguiente(3)?.lexema === '(')) {
             this.analizarMetodo();
         }
-            // 3. Si NO es método ni constructor, y tiene estructura de declaración, es ATRIBUTO
-            // Eliminamos la restricción de que DEBE haber un ';' en la posición 3,
-        // porque podría haber un '=' (inicialización).
+        // Atributo (Tipo ID)
         else if (this.tipoActual === 'MOD_ACCESO' &&
             this.mirarSiguiente(1)?.tipo === 'TIPO' &&
             this.mirarSiguiente(2)?.tipo === 'ID') {
             this.analizarAtributo();
         }
-        // 4. Caso Main (static void main)
+        // Main específico
         else if (this.lexemaActual === 'public' && this.mirarSiguiente(1)?.lexema === 'static') {
             this.analizarMetodo();
         }
         else {
             this.error("Declaración no reconocida dentro de la clase");
-            this.avanzar(); // Evitar bucle infinito si la recuperación falla
+            this.avanzar();
         }
     }
 
-    // === ATRIBUTOS AHORA SOPORTAN INICIALIZACIÓN ===
     analizarAtributo() {
         this.esperar('MOD_ACCESO');
         const tTipo = this.tokenActual;
@@ -361,7 +368,6 @@ class AnalizadorSintactico {
 
         if(tId && tTipo) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Atributo', tId);
 
-        // Soporte para inicialización: private int x = 10;
         if (this.coincidir('OP_ASIGN', '=')) {
             this.analizarExpresion();
         }
@@ -477,7 +483,7 @@ class AnalizadorSintactico {
             this.esperar('DELIM', ';');
         } else {
             this.error("Sentencia no reconocida");
-            this.avanzar(); // Evitar freeze
+            this.avanzar();
         }
     }
 
@@ -523,19 +529,30 @@ class AnalizadorSintactico {
         }
     }
 
+    // === ANALIZAR EXPRESIÓN MEJORADA (DETECTA INICIO DE NUEVA LÍNEA) ===
     analizarExpresion() {
         let parentesisAbiertos = 0;
-        // Tokens que indican parada SEGURA
-        const tokensDeParada = ['}', ';', 'public', 'private', 'protected', 'return', 'if', 'while', 'for'];
+        // Tokens de parada fuertes
+        const tokensDeParada = ['}', ';', 'public', 'private', 'protected', 'return', 'if', 'while', 'for', 'this'];
 
         while (this.tokenActual) {
-            // Si vemos un token de parada y no hay paréntesis pendientes, terminamos la expresión
-            if (parentesisAbiertos === 0 && tokensDeParada.includes(this.lexemaActual)) {
+            const lexema = this.lexemaActual;
+            const tipo = this.tipoActual;
+
+            // Parada por fin de bloque o palabra clave
+            if (parentesisAbiertos === 0 && tokensDeParada.includes(lexema)) {
                 break;
             }
 
-            if (this.lexemaActual === '(') parentesisAbiertos++;
-            else if (this.lexemaActual === ')') {
+            // HEURÍSTICA: Parada por inicio de declaración (ID + ID)
+            // Ejemplo: "Persona persona2..." -> detectamos que empieza nueva instrucción
+            const siguiente = this.mirarSiguiente(1);
+            if (parentesisAbiertos === 0 && tipo === 'ID' && siguiente && siguiente.tipo === 'ID') {
+                break;
+            }
+
+            if (lexema === '(') parentesisAbiertos++;
+            else if (lexema === ')') {
                 if (parentesisAbiertos > 0) parentesisAbiertos--;
                 else break;
             }
