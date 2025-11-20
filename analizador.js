@@ -187,6 +187,8 @@ class AnalizadorSintactico {
 
         const ultimoError = this.errores[this.errores.length - 1];
         if (ultimoError && ultimoError.linea === token.linea && ultimoError.columna === token.columna) {
+            // Si el error es repetido, forzamos un avance para romper bucles infinitos
+            this.avanzar();
             return;
         }
 
@@ -308,40 +310,62 @@ class AnalizadorSintactico {
                 this.analizarMiembro();
             } catch (e) {
                 if (e.message === "LIMITE_ERRORES_ALCANZADO") throw e;
+                // Recuperar ya se llamó, seguimos intentando con el siguiente token
             }
         }
         this.esperar('DELIM', '}');
     }
 
+    // === AQUÍ ESTABA EL PROBLEMA DE LOS ATRIBUTOS ===
     analizarMiembro() {
-        if (this.tipoActual === 'MOD_ACCESO' &&
-            this.mirarSiguiente(1)?.tipo === 'TIPO' &&
-            this.mirarSiguiente(2)?.tipo === 'ID' &&
-            this.mirarSiguiente(3)?.lexema === ';') {
-            this.analizarAtributo();
-        }
-        else if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') &&
+        // 1. Primero verificamos si es un Constructor (Clase(...) { )
+        if ((this.tipoActual === 'MOD_ACCESO' || this.tipoActual === 'ID') &&
             this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 1 : 0)?.tipo === 'ID' &&
             this.mirarSiguiente(this.tipoActual === 'MOD_ACCESO' ? 2 : 1)?.lexema === '(') {
             this.analizarConstructor();
         }
+        // 2. Verificamos si es un Método (@Override o tiene paréntesis después del ID)
         else if (this.lexemaActual === '@Override' ||
             (this.tipoActual === 'MOD_ACCESO' &&
-                (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void' || this.mirarSiguiente(1)?.lexema === 'static'))) {
+                (this.mirarSiguiente(1)?.tipo === 'TIPO' || this.mirarSiguiente(1)?.lexema === 'void' || this.mirarSiguiente(1)?.lexema === 'static') &&
+                // IMPORTANTE: Un método DEBE tener '(' después del nombre.
+                // ModAcceso + Tipo + Nombre + '('
+                this.mirarSiguiente(3)?.lexema === '(')) {
+            this.analizarMetodo();
+        }
+            // 3. Si NO es método ni constructor, y tiene estructura de declaración, es ATRIBUTO
+            // Eliminamos la restricción de que DEBE haber un ';' en la posición 3,
+        // porque podría haber un '=' (inicialización).
+        else if (this.tipoActual === 'MOD_ACCESO' &&
+            this.mirarSiguiente(1)?.tipo === 'TIPO' &&
+            this.mirarSiguiente(2)?.tipo === 'ID') {
+            this.analizarAtributo();
+        }
+        // 4. Caso Main (static void main)
+        else if (this.lexemaActual === 'public' && this.mirarSiguiente(1)?.lexema === 'static') {
             this.analizarMetodo();
         }
         else {
             this.error("Declaración no reconocida dentro de la clase");
+            this.avanzar(); // Evitar bucle infinito si la recuperación falla
         }
     }
 
+    // === ATRIBUTOS AHORA SOPORTAN INICIALIZACIÓN ===
     analizarAtributo() {
         this.esperar('MOD_ACCESO');
         const tTipo = this.tokenActual;
         this.esperar('TIPO');
         const tId = this.tokenActual;
         this.esperar('ID');
+
         if(tId && tTipo) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Atributo', tId);
+
+        // Soporte para inicialización: private int x = 10;
+        if (this.coincidir('OP_ASIGN', '=')) {
+            this.analizarExpresion();
+        }
+
         this.esperar('DELIM', ';');
     }
 
@@ -445,15 +469,15 @@ class AnalizadorSintactico {
         } else if (this.tipoActual === 'ID') {
             this.analizarSentenciaID();
         } else if (this.lexemaActual === 'this') {
-            // === CORREGIDO: Usar analizarExpresion para el lado derecho ===
             this.esperar('PR', 'this');
             this.esperar('DELIM', '.');
             this.esperar('ID');
             this.esperar('OP_ASIGN', '=');
-            this.analizarExpresion(); // Antes esperaba ID ciegamente
+            this.analizarExpresion();
             this.esperar('DELIM', ';');
         } else {
             this.error("Sentencia no reconocida");
+            this.avanzar(); // Evitar freeze
         }
     }
 
@@ -477,7 +501,6 @@ class AnalizadorSintactico {
         if(tId) this.registrarSimbolo(tId.lexema, tTipo.lexema, 'Variable Local (Objeto)', tId);
 
         if (this.coincidir('OP_ASIGN', '=')) {
-            // === CORREGIDO: Usar analizarExpresion en vez de while ===
             this.analizarExpresion();
         }
         this.esperar('DELIM', ';');
@@ -492,8 +515,6 @@ class AnalizadorSintactico {
             this.esperar('DELIM', ';');
         }
         else if (sig?.lexema === '.' || sig?.lexema === '(') {
-            // === CORREGIDO: Usar analizarExpresion en vez de while ===
-            // Esto permite llamar metodos tipo objeto.metodo() y parar si falta ;
             this.analizarExpresion();
             this.esperar('DELIM', ';');
         }
@@ -516,7 +537,7 @@ class AnalizadorSintactico {
             if (this.lexemaActual === '(') parentesisAbiertos++;
             else if (this.lexemaActual === ')') {
                 if (parentesisAbiertos > 0) parentesisAbiertos--;
-                else break; // Cierre extra
+                else break;
             }
 
             this.avanzar();
